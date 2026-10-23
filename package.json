@@ -1,0 +1,24 @@
+{
+  "name": "claude-all-skills",
+  "version": "1.0.0",
+  "description": "11 Claude skills for day trading: scan thousands of charts, track breaking news, time every entry and exit, and replay every outcome before you risk a dollar.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "python -m unittest discover -s tests -v"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "lucide-react": "^0.460.0",
+    "next": "^14.2.18",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
