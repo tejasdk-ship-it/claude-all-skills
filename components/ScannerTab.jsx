@@ -10,6 +10,9 @@ export default function ScannerTab({ onSelectSymbol, activeSymbol }) {
   const [selectedFilter, setSelectedFilter] = useState('ALL');
   const [customTicker, setCustomTicker] = useState('');
   const [isLoadingCustom, setIsLoadingCustom] = useState(false);
+  const [isRescanningAll, setIsRescanningAll] = useState(false);
+  const [lastScannedTime, setLastScannedTime] = useState(null);
+  const [scanStatus, setScanStatus] = useState(null);
   const [tickersList, setTickersList] = useState(POPULAR_TICKERS);
 
   const filters = [
@@ -39,8 +42,8 @@ export default function ScannerTab({ onSelectSymbol, activeSymbol }) {
 
       if (data && data.price) {
         sound.playClick();
-        const orHigh = Number((data.price * 0.995).toFixed(2));
-        const orLow = Number((data.price * 0.975).toFixed(2));
+        const orHigh = data.orHigh || Number((data.price * 1.008).toFixed(2));
+        const orLow = data.orLow || Number((data.price * 0.985).toFixed(2));
 
         const newStock = {
           symbol: data.symbol,
@@ -48,11 +51,12 @@ export default function ScannerTab({ onSelectSymbol, activeSymbol }) {
           price: data.price,
           change: data.change || 0,
           changePct: data.changePct || 0,
-          volume: data.volume ? `${(data.volume / 1000000).toFixed(1)}M` : '15.4M',
+          volume: data.volume || '15.4M',
           orHigh,
           orLow,
           setup: 'ORB Breakout',
-          sector: 'Active Market'
+          sector: 'Active Market',
+          source: data.source || 'live-yahoo'
         };
 
         setTickersList([newStock, ...tickersList.filter(t => t.symbol !== newStock.symbol)]);
@@ -63,6 +67,55 @@ export default function ScannerTab({ onSelectSymbol, activeSymbol }) {
       console.error(err);
     } finally {
       setIsLoadingCustom(false);
+    }
+  };
+
+  const handleRescanAll = async () => {
+    setIsRescanningAll(true);
+    sound.playClick();
+    setScanStatus('Scanning live market...');
+
+    try {
+      const symbolsToScan = tickersList.map(t => t.symbol);
+      const res = await fetch(`/api/market/quote?symbols=${encodeURIComponent(symbolsToScan.join(','))}`);
+      const data = await res.json();
+
+      if (data && data.quotes && Array.isArray(data.quotes)) {
+        const quoteMap = new Map();
+        let liveCount = 0;
+        data.quotes.forEach(q => {
+          quoteMap.set(q.symbol, q);
+          if (q.source === 'live-yahoo') liveCount++;
+        });
+
+        setTickersList(prevList =>
+          prevList.map(item => {
+            const live = quoteMap.get(item.symbol);
+            if (!live) return item;
+            return {
+              ...item,
+              price: live.price ?? item.price,
+              change: live.change ?? item.change,
+              changePct: live.changePct ?? item.changePct,
+              volume: live.volume ?? item.volume,
+              orHigh: live.orHigh ?? item.orHigh,
+              orLow: live.orLow ?? item.orLow,
+              source: live.source
+            };
+          })
+        );
+
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        setLastScannedTime(timeStr);
+        setScanStatus(`${liveCount} Live Quotes Updated`);
+        sound.playAlert();
+      }
+    } catch (err) {
+      console.error('Failed to rescan candidates:', err);
+      setScanStatus('Scan failed');
+    } finally {
+      setIsRescanningAll(false);
     }
   };
 
@@ -127,21 +180,54 @@ export default function ScannerTab({ onSelectSymbol, activeSymbol }) {
 
       {/* Scanned Stocks Grid / Table */}
       <div className="glass-panel" style={{ overflow: 'hidden' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontWeight: '700', fontSize: '0.9rem' }}>Scan Candidates</span>
             <span className="badge badge-green font-mono">{filteredTickers.length} Matches</span>
+            {lastScannedTime ? (
+              <span className="badge badge-cyan" style={{ fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--neon-green)', display: 'inline-block' }}></span>
+                {scanStatus || `Live ${lastScannedTime}`}
+              </span>
+            ) : (
+              <span className="badge" style={{ fontSize: '0.72rem', background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>
+                Default Preset (Click Scan to Update Live)
+              </span>
+            )}
           </div>
 
-          <div style={{ position: 'relative', width: '240px' }}>
-            <Search size={14} style={{ position: 'absolute', left: '10px', top: '10px', color: 'var(--text-muted)' }} />
-            <input
-              type="text"
-              placeholder="Search in scan results..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{ width: '100%', paddingLeft: '32px', fontSize: '0.8rem' }}
-            />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button
+              onClick={handleRescanAll}
+              disabled={isRescanningAll}
+              className="btn btn-primary"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '7px 14px',
+                fontSize: '0.8rem',
+                fontWeight: '700',
+                background: 'linear-gradient(135deg, #00d2ff 0%, #00f0ff 100%)',
+                color: '#070A12',
+                borderRadius: '8px',
+                boxShadow: '0 0 15px rgba(0, 210, 255, 0.3)'
+              }}
+            >
+              <RefreshCw size={14} className={isRescanningAll ? 'spin' : ''} />
+              {isRescanningAll ? 'Scanning Live...' : '🔄 Scan Again (Live All)'}
+            </button>
+
+            <div style={{ position: 'relative', width: '220px' }}>
+              <Search size={14} style={{ position: 'absolute', left: '10px', top: '10px', color: 'var(--text-muted)' }} />
+              <input
+                type="text"
+                placeholder="Search in scan results..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{ width: '100%', paddingLeft: '32px', fontSize: '0.8rem' }}
+              />
+            </div>
           </div>
         </div>
 
@@ -178,6 +264,15 @@ export default function ScannerTab({ onSelectSymbol, activeSymbol }) {
                           {item.symbol}
                         </span>
                         <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{item.sector}</span>
+                        {item.source === 'live-yahoo' ? (
+                          <span className="badge badge-green" style={{ fontSize: '0.62rem', padding: '1px 5px', fontWeight: '700' }}>
+                            ● LIVE
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: '0.62rem', padding: '1px 5px', borderRadius: '4px', background: 'rgba(255, 255, 255, 0.05)', color: 'var(--text-muted)' }}>
+                            FIXTURE
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{item.name}</div>
                     </td>

@@ -2,15 +2,8 @@ import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
-// Serverless route to fetch live Yahoo Finance chart & quote
-export async function GET(request) {
-  const { searchParams } = new URL(request.url);
-  const symbol = (searchParams.get('symbol') || 'TSLA').toUpperCase();
-  const range = searchParams.get('range') || '1d';
-  const interval = searchParams.get('interval') || '5m';
-
+async function fetchSingleQuote(symbol, range = '1d', interval = '5m') {
   const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
   const hosts = ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com'];
 
   for (const host of hosts) {
@@ -52,7 +45,27 @@ export async function GET(request) {
             }
           }
 
-          return NextResponse.json({
+          // Calculate 15m Opening Range (if candles exist)
+          let orHigh = meta.regularMarketDayHigh || Number((currentPrice * 1.008).toFixed(2));
+          let orLow = meta.regularMarketDayLow || Number((currentPrice * 0.985).toFixed(2));
+          if (candles.length >= 3) {
+            const first15 = candles.slice(0, 3);
+            const high15 = Math.max(...first15.map(c => c.high));
+            const low15 = Math.min(...first15.map(c => c.low));
+            if (high15 && low15 && high15 > 0 && low15 > 0) {
+              orHigh = Number(high15.toFixed(2));
+              orLow = Number(low15.toFixed(2));
+            }
+          }
+
+          const volNum = meta.regularMarketVolume || 0;
+          const formattedVol = volNum > 1000000 
+            ? `${(volNum / 1000000).toFixed(1)}M` 
+            : volNum > 1000 
+            ? `${(volNum / 1000).toFixed(0)}K` 
+            : `${volNum}`;
+
+          return {
             success: true,
             source: 'live-yahoo',
             symbol,
@@ -61,9 +74,12 @@ export async function GET(request) {
             changePct: Number(changePct.toFixed(2)),
             high: meta.regularMarketDayHigh || (candles.length ? Math.max(...candles.map(c => c.high)) : currentPrice),
             low: meta.regularMarketDayLow || (candles.length ? Math.min(...candles.map(c => c.low)) : currentPrice),
-            volume: meta.regularMarketVolume || 0,
+            volume: formattedVol,
+            volumeRaw: volNum,
+            orHigh,
+            orLow,
             candles: candles.slice(-78) // recent 78 5-min bars
-          });
+          };
         }
       }
     } catch (err) {
@@ -72,16 +88,44 @@ export async function GET(request) {
   }
 
   // Graceful fallback for offline / rate-limited cloud IPs
-  return NextResponse.json({
+  return {
     success: true,
     source: 'simulated-fixture',
     symbol,
-    price: symbol === 'NVDA' ? 142.60 : symbol === 'AAPL' ? 231.45 : 364.18,
-    change: symbol === 'NVDA' ? 3.10 : symbol === 'AAPL' ? -0.85 : 4.82,
-    changePct: symbol === 'NVDA' ? 2.22 : symbol === 'AAPL' ? -0.37 : 1.34,
+    price: symbol === 'NVDA' ? 142.60 : symbol === 'AAPL' ? 231.45 : symbol === 'PLTR' ? 44.20 : 364.18,
+    change: symbol === 'NVDA' ? 3.10 : symbol === 'AAPL' ? -0.85 : symbol === 'PLTR' ? 1.65 : 4.82,
+    changePct: symbol === 'NVDA' ? 2.22 : symbol === 'AAPL' ? -0.37 : symbol === 'PLTR' ? 3.88 : 1.34,
     high: 366.50,
     low: 353.90,
-    volume: 48200000,
+    volume: '48.2M',
+    volumeRaw: 48200000,
+    orHigh: 362.18,
+    orLow: 354.47,
     candles: []
-  });
+  };
 }
+
+// Serverless route to fetch live Yahoo Finance chart & quote
+export async function GET(request) {
+  const { searchParams } = new URL(request.url);
+  const symbolsParam = searchParams.get('symbols');
+  const symbolParam = searchParams.get('symbol');
+  const range = searchParams.get('range') || '1d';
+  const interval = searchParams.get('interval') || '5m';
+
+  // Batch query mode
+  if (symbolsParam) {
+    const list = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+    const results = await Promise.all(list.map(s => fetchSingleQuote(s, range, interval)));
+    return NextResponse.json({
+      success: true,
+      quotes: results
+    });
+  }
+
+  // Single quote mode
+  const symbol = (symbolParam || 'TSLA').toUpperCase();
+  const quote = await fetchSingleQuote(symbol, range, interval);
+  return NextResponse.json(quote);
+}
+
